@@ -1,0 +1,237 @@
+digraph SAR_TS_BERT_DUAL {
+  graph [
+    rankdir=LR,
+    bgcolor="white",
+    pad=0.28,
+    nodesep=0.42,
+    ranksep=0.62,
+    splines=ortho,
+    fontname="Arial"
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Arial",
+    fontsize=11,
+    margin="0.10,0.07",
+    color="#333333",
+    fontcolor="#111111"
+  ];
+
+  edge [
+    fontname="Arial",
+    fontsize=10,
+    color="#4A4A4A",
+    arrowsize=0.7
+  ];
+
+  subgraph cluster_pretrain {
+    label="Self-supervised pre-training";
+    color="#AAB7C4";
+    penwidth=1.2;
+    style="rounded";
+    fontname="Arial Bold";
+    fontsize=13;
+
+    unlabeled [
+      label=<Unlabeled SAR zarr<br/><font point-size="9">observations: T x H x W x 6</font>>,
+      fillcolor="#F7F7F7"
+    ];
+    sampler [
+      label=<Pixel sampler<br/><font point-size="9">clean x: B x T x 6</font>>,
+      fillcolor="#E8F0FE"
+    ];
+    mask [
+      label=<Span + physics mask<br/><font point-size="9">VV/VH temporal change</font>>,
+      fillcolor="#E8F0FE"
+    ];
+    corrupt [
+      label=<Gaussian corruption<br/><font point-size="9">masked steps only<br/>x_tilde: B x T x 6</font>>,
+      fillcolor="#E8F0FE"
+    ];
+
+    unlabeled -> sampler -> mask;
+    sampler -> corrupt;
+    mask -> corrupt [style=dashed, xlabel="mask M"];
+  }
+
+  subgraph cluster_encoder {
+    label="Main encoder: DualBranchSarBertEncoder";
+    color="#8E73A8";
+    penwidth=1.8;
+    style="rounded";
+    fontname="Arial Bold";
+    fontsize=14;
+
+    x6 [
+      label=<6-band SAR sequence<br/><font point-size="9">B x T x 6</font>>,
+      fillcolor="#F7F7F7"
+    ];
+    split [
+      label=<Physical band split>,
+      fillcolor="#F3EAF7"
+    ];
+
+    subgraph cluster_scatter {
+      label="Scatter branch";
+      color="#6D8FC0";
+      style="rounded";
+      fontname="Arial Bold";
+      fontsize=12;
+
+      sin [
+        label=<VV, VH, VV/VH<br/><font point-size="9">B x T x 3</font>>,
+        fillcolor="#E8F0FE"
+      ];
+      sproj [
+        label=<Linear(3,d/4) + PE(d/4)<br/><font point-size="9">Concat to B x T x d/2</font>>,
+        fillcolor="#E8F0FE"
+      ];
+      senc [
+        label=<Transformer Encoder x Ns<br/><font point-size="9">MHSA + FFN + residual<br/>B x T x d/2</font>>,
+        fillcolor="#DCE9FB",
+        penwidth=1.5
+      ];
+      sin -> sproj -> senc;
+    }
+
+    subgraph cluster_physics {
+      label="Physics branch";
+      color="#5E9A75";
+      style="rounded";
+      fontname="Arial Bold";
+      fontsize=12;
+
+      pin [
+        label=<H, alpha, A<br/><font point-size="9">B x T x 3</font>>,
+        fillcolor="#EAF6EF"
+      ];
+      pproj [
+        label=<Linear(3,d/4) + PE(d/4)<br/><font point-size="9">Concat to B x T x d/2</font>>,
+        fillcolor="#EAF6EF"
+      ];
+      penc [
+        label=<Transformer Encoder x Np<br/><font point-size="9">MHSA + FFN + residual<br/>B x T x d/2</font>>,
+        fillcolor="#DDF0E4",
+        penwidth=1.5
+      ];
+      pin -> pproj -> penc;
+    }
+
+    cross [
+      label=<Bidirectional cross-attention<br/><font point-size="9">S queries P, P queries S</font>>,
+      fillcolor="#F3EAF7",
+      penwidth=1.8
+    ];
+    cat [
+      label=<Concat fusion tokens<br/><font point-size="9">(S+P, S to P, P to S)<br/>B x T x 3d/2</font>>,
+      fillcolor="#F3EAF7"
+    ];
+    fproj [
+      label=<Fusion projection + LN<br/><font point-size="9">Linear(3d/2,d)<br/>B x T x d</font>>,
+      fillcolor="#F3EAF7",
+      penwidth=1.5
+    ];
+    fenc [
+      label=<Fusion Transformer x Nf<br/><font point-size="9">optional if Nf&gt;0<br/>B x T x d</font>>,
+      fillcolor="#F3EAF7"
+    ];
+    hidden [
+      label=<Fused temporal representation H<br/><font point-size="9">B x T x d</font>>,
+      fillcolor="#EAF6EF",
+      penwidth=1.7
+    ];
+
+    x6 -> split;
+    split -> sin;
+    split -> pin;
+    senc -> cross;
+    penc -> cross;
+    cross -> cat -> fproj -> fenc -> hidden;
+  }
+
+  subgraph cluster_recon {
+    label="Pre-training output";
+    color="#D0A052";
+    penwidth=1.2;
+    style="rounded";
+    fontname="Arial Bold";
+    fontsize=13;
+
+    recon [
+      label=<Reconstruction head<br/><font point-size="9">Linear(d,6), B x T x 6</font>>,
+      fillcolor="#FFF3E0"
+    ];
+    select [
+      label=<Masked token select<br/><font point-size="9">|Mask| x 6</font>>,
+      fillcolor="#FFF3E0"
+    ];
+    lpre [
+      label=<Masked MSE<br/><font point-size="9">L_pre</font>>,
+      fillcolor="#FDEDEC",
+      color="#B03A2E"
+    ];
+    recon -> select -> lpre;
+  }
+
+  subgraph cluster_finetune {
+    label="Fine-tuning / inference";
+    color="#D0A052";
+    penwidth=1.2;
+    style="rounded";
+    fontname="Arial Bold";
+    fontsize=13;
+
+    labeled [
+      label=<Processed zarr<br/><font point-size="9">series: B x T x 6, label: B</font>>,
+      fillcolor="#F7F7F7"
+    ];
+    pool [
+      label=<Temporal mean pooling<br/><font point-size="9">B x T x d to B x d</font>>,
+      fillcolor="#FFF3E0"
+    ];
+    cls [
+      label=<Crop classifier<br/><font point-size="9">Dropout + Linear(d,K)</font>>,
+      fillcolor="#FFF3E0",
+      penwidth=1.5
+    ];
+    lcls [
+      label=<Cross-entropy<br/><font point-size="9">L_cls</font>>,
+      fillcolor="#FDEDEC",
+      color="#B03A2E"
+    ];
+    pred [
+      label=<Prediction<br/><font point-size="9">softmax / argmax / parcel vote</font>>,
+      fillcolor="#FFF3E0"
+    ];
+    pool -> cls;
+    cls -> lcls;
+    cls -> pred;
+  }
+
+  corrupt -> x6 [xlabel="x_tilde"];
+  hidden -> recon;
+  sampler -> lpre [style=dashed, color="#B03A2E", xlabel="clean target at M"];
+
+  labeled -> x6 [xlabel="x"];
+  hidden -> pool;
+
+  adapter [
+    label=<Optional DoRA-style residual adapter<br/><font point-size="9">Linear(d,r) to GELU to Dropout to Linear(r,d)<br/>after MHSA and FFN</font>>,
+    fillcolor="#F5F5F5",
+    color="#777777",
+    style="rounded,filled,dashed"
+  ];
+
+  single [
+    label=<Single-branch SarBertEncoder<br/><font point-size="9">ablation baseline only<br/>Linear(6,d/2)+PE to Transformer x N</font>>,
+    fillcolor="#F5F5F5",
+    color="#777777",
+    style="rounded,filled,dashed"
+  ];
+
+  adapter -> senc [style=dashed, color="#777777", xlabel="if use_dora"];
+  adapter -> penc [style=dashed, color="#777777"];
+  adapter -> fenc [style=dashed, color="#777777"];
+}

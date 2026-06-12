@@ -1,0 +1,94 @@
+flowchart LR
+  %% Dual-branch SAR-TS-BERT main method, based on real forward paths.
+
+  classDef input fill:#F7F7F7,stroke:#444,stroke-width:1px,color:#111;
+  classDef data fill:#E8F0FE,stroke:#4A6FA5,stroke-width:1px,color:#111;
+  classDef enc fill:#EAF6EF,stroke:#4F8A67,stroke-width:1px,color:#111;
+  classDef phys fill:#ECF7F0,stroke:#4F8A67,stroke-width:1px,color:#111;
+  classDef fuse fill:#F3EAF7,stroke:#7D4E8A,stroke-width:1px,color:#111;
+  classDef head fill:#FFF3E0,stroke:#C7832B,stroke-width:1px,color:#111;
+  classDef loss fill:#FDEDEC,stroke:#B03A2E,stroke-width:1px,color:#111;
+  classDef aux fill:#F5F5F5,stroke:#777,stroke-dasharray: 5 3,color:#111;
+
+  subgraph P["Self-supervised pre-training"]
+    direction LR
+    U["Unlabeled SAR zarr<br/>observations: T x H x W x 6"]:::input
+    Sample["Pixel sampler<br/>clean x: B x T x 6"]:::data
+    Mask["Span + physics mask<br/>VV/VH temporal change<br/>M: B x T"]:::data
+    Noise["Gaussian corruption<br/>masked steps only<br/>x_tilde: B x T x 6"]:::data
+    U --> Sample --> Mask
+    Sample --> Noise
+    Mask -.->|mask M| Noise
+  end
+
+  subgraph DB["Main encoder: DualBranchSarBertEncoder"]
+    direction LR
+    X["6-band SAR sequence<br/>B x T x 6"]:::input
+    Split["Physical band split"]:::data
+
+    subgraph SBranch["Scatter branch"]
+      direction LR
+      SIn["VV, VH, VV/VH<br/>B x T x 3"]:::data
+      SProj["Linear(3,d/4) + PE(d/4)<br/>Concat -> B x T x d/2"]:::enc
+      SEnc["Transformer Encoder x Ns<br/>MHSA + FFN + residual<br/>B x T x d/2"]:::enc
+      SIn --> SProj --> SEnc
+    end
+
+    subgraph PBranch["Physics branch"]
+      direction LR
+      PIn["H, alpha, A<br/>B x T x 3"]:::data
+      PProj["Linear(3,d/4) + PE(d/4)<br/>Concat -> B x T x d/2"]:::phys
+      PEnc["Transformer Encoder x Np<br/>MHSA + FFN + residual<br/>B x T x d/2"]:::phys
+      PIn --> PProj --> PEnc
+    end
+
+    Cross["Bidirectional cross-attention<br/>Scatter queries Physics<br/>Physics queries Scatter"]:::fuse
+    Cat["Concat<br/>(S+P, S->P, P->S)<br/>B x T x 3d/2"]:::fuse
+    FProj["Fusion projection + LN<br/>Linear(3d/2,d)<br/>B x T x d"]:::fuse
+    FEnc["Fusion Transformer x Nf<br/>optional when Nf>0<br/>B x T x d"]:::fuse
+    H["Fused temporal representation<br/>H: B x T x d"]:::enc
+
+    X --> Split
+    Split --> SIn
+    Split --> PIn
+    SEnc --> Cross
+    PEnc --> Cross
+    Cross --> Cat --> FProj --> FEnc --> H
+  end
+
+  Noise --> X
+
+  subgraph R["Pre-training output"]
+    direction LR
+    Recon["Reconstruction head<br/>Linear(d,6)<br/>B x T x 6"]:::head
+    Select["Masked token select<br/>|M| x 6"]:::head
+    Lpre["Masked MSE<br/>L_pre"]:::loss
+    Recon --> Select --> Lpre
+  end
+
+  H --> Recon
+  Sample -.->|clean target at M| Lpre
+
+  subgraph F["Fine-tuning / inference"]
+    direction LR
+    Labeled["Processed zarr<br/>series: B x T x 6<br/>label: B"]:::input
+    Pool["Temporal mean pooling<br/>B x T x d -> B x d"]:::head
+    Cls["Crop classifier<br/>Dropout + Linear(d,K)<br/>logits: B x K"]:::head
+    Lcls["Cross-entropy<br/>L_cls"]:::loss
+    Pred["Prediction<br/>softmax / argmax<br/>optional parcel vote"]:::head
+    Pool --> Cls
+    Cls --> Lcls
+    Cls --> Pred
+  end
+
+  Labeled --> X
+  H --> Pool
+
+  subgraph A["Optional training detail"]
+    direction LR
+    Dora["DoRA-style residual adapter<br/>Linear(d,r)->GELU->Dropout->Linear(r,d)<br/>after MHSA and FFN"]:::aux
+    Single["Single-branch SarBertEncoder<br/>ablation baseline only<br/>Linear(6,d/2)+PE -> Transformer x N"]:::aux
+  end
+  Dora -.->|if use_dora| SEnc
+  Dora -.->|if use_dora| PEnc
+  Dora -.->|if use_dora and Nf>0| FEnc

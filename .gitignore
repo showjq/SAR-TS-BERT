@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+venv/
+env/
+conda/
+
+# Local data and experiment artifacts
+/datasets/
+/outputs/
+/classifier_outputs/
+/downloads/
+*.zarr/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.log
+
+# Vector/raster data products
+src/shpfiles/
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.tif
+*.tiff
+*.vrt
+
+# Comparison/baseline project folders not part of SAR-TS-BERT core
+/ExViT/
+/presto/
+/presto_ref/
+/psetae/
+/sits_bert/
+/tsvit/
+
+# Research drafts and local notes
+/paper/
+/paper-ZH/
+/refine-logs/
+/literature/
+/figures/
+*.docx
+*.zip
+*.pdf
+
+# Local/editor/system files
+.trae/
+.agents/
+.codex/
+.DS_Store
+Thumbs.db
