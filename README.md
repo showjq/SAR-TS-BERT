@@ -9,10 +9,6 @@ The current research focus is:
 - Dual-branch polarization/physics feature fusion
 - Transfer of pretrained encoders to crop classification and parcel inference
 
-## Repository Scope
-
-This GitHub repository keeps the core SAR-TS-BERT code only. Local datasets, training outputs, pretrained weights, paper drafts, and comparison-project folders such as `presto`, `ExViT`, `psetae`, `sits_bert`, and `tsvit` are intentionally excluded.
-
 ## Structure
 
 ```text
